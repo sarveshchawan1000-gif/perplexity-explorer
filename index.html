@@ -595,6 +595,17 @@
         </div>
       </div>
 
+      <!-- Download progress bar -->
+      <div id="download-progress-container" style="display: none; margin-top: 1rem; width: 100%;">
+        <div style="background: #e2e8f0; border-radius: 6px; height: 8px; overflow: hidden; width: 100%;">
+          <div id="download-progress-bar" style="width: 0%; height: 100%; background: linear-gradient(90deg, var(--primary), var(--purple)); transition: width 0.2s;"></div>
+        </div>
+        <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 0.4rem; display: flex; justify-content: space-between;">
+          <span id="download-file-name">Downloading the model…</span>
+          <span id="download-progress-stats">0%</span>
+        </div>
+      </div>
+
       <!-- Red error banner for loading/inference failure -->
       <div class="error-box" id="error-box"></div>
     </section>
@@ -775,8 +786,13 @@
 
   <!-- JavaScript Module -->
   <script type="module">
-    // Import Transformers.js v3 AutoTokenizer, AutoModelForCausalLM, and Tensor
-    import { AutoTokenizer, AutoModelForCausalLM, Tensor } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3";
+    // Import Transformers.js v3 AutoTokenizer, AutoModelForCausalLM, Tensor, and env
+    import { AutoTokenizer, AutoModelForCausalLM, Tensor, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3";
+
+    // Disable local path lookups so requests go directly to Hugging Face Hub (avoids 404 delays)
+    if (env) {
+      env.allowLocalModels = false;
+    }
 
     // Application state
     let tokenizer = null;
@@ -793,6 +809,10 @@
     const statusText = document.getElementById("status-text");
     const errorBox = document.getElementById("error-box");
     const sampleButtons = document.querySelectorAll(".sample-btn[data-sentence]");
+    const downloadProgressContainer = document.getElementById("download-progress-container");
+    const downloadProgressBar = document.getElementById("download-progress-bar");
+    const downloadFileName = document.getElementById("download-file-name");
+    const downloadProgressStats = document.getElementById("download-progress-stats");
 
     // DOM Elements - Section 2 & 3
     const modelTokenTbody = document.getElementById("model-token-tbody");
@@ -883,17 +903,55 @@
       btnCalcSpinner.style.display = "inline-block";
       btnCalculate.disabled = true;
 
+      if (downloadProgressContainer) {
+        downloadProgressContainer.style.display = "block";
+        downloadProgressBar.style.width = "0%";
+        downloadFileName.textContent = "Connecting to Hugging Face…";
+        downloadProgressStats.textContent = "0%";
+      }
+
+      // Progress callback to track download percentage and megabytes
+      const progressCallback = (progress) => {
+        if (progress.status === "progress" && progress.total) {
+          const pct = Math.round(progress.progress);
+          const loadedMB = (progress.loaded / 1048576).toFixed(1);
+          const totalMB = (progress.total / 1048576).toFixed(1);
+
+          setStatus(`Downloading the model… ${pct}%`, "loading");
+
+          if (downloadProgressContainer) {
+            downloadProgressContainer.style.display = "block";
+            downloadProgressBar.style.width = `${pct}%`;
+            downloadFileName.textContent = progress.file || "model weights";
+            downloadProgressStats.textContent = `${pct}% (${loadedMB}/${totalMB} MB)`;
+          }
+        } else if (progress.status === "done") {
+          if (downloadFileName) {
+            downloadFileName.textContent = `Downloaded ${progress.file || "weights"}. Initializing session…`;
+          }
+        }
+      };
+
       try {
         // Load tokenizer
-        tokenizer = await AutoTokenizer.from_pretrained("Xenova/distilgpt2");
+        tokenizer = await AutoTokenizer.from_pretrained("Xenova/distilgpt2", {
+          progress_callback: progressCallback
+        });
 
         // Load causal language model with q8 quantization
         model = await AutoModelForCausalLM.from_pretrained("Xenova/distilgpt2", {
-          dtype: "q8"
+          dtype: "q8",
+          progress_callback: progressCallback
         });
 
+        if (downloadProgressContainer) {
+          downloadProgressContainer.style.display = "none";
+        }
         setStatus("Model ready", "ready");
       } catch (err) {
+        if (downloadProgressContainer) {
+          downloadProgressContainer.style.display = "none";
+        }
         setStatus("Loading failed");
         showError("Failed to load model: " + (err.message || err));
         throw err;
